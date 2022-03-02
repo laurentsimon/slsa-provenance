@@ -3,6 +3,8 @@ package pkg
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -18,6 +20,7 @@ import (
 	"github.com/google/trillian/merkle/rfc6962"
 	intoto "github.com/in-toto/in-toto-golang/in_toto"
 	dsselib "github.com/secure-systems-lab/go-securesystemslib/dsse"
+	"github.com/sigstore/sigstore/pkg/signature"
 	"github.com/sigstore/sigstore/pkg/signature/dsse"
 
 	"github.com/sigstore/cosign/cmd/cosign/cli/fulcio"
@@ -26,9 +29,11 @@ import (
 	"github.com/sigstore/rekor/pkg/generated/client"
 	"github.com/sigstore/rekor/pkg/generated/client/entries"
 	"github.com/sigstore/rekor/pkg/generated/client/index"
+	"github.com/sigstore/rekor/pkg/generated/client/tlog"
 	"github.com/sigstore/rekor/pkg/generated/models"
 	"github.com/sigstore/rekor/pkg/types"
 	intotod "github.com/sigstore/rekor/pkg/types/intoto/v0.0.1"
+	"github.com/sigstore/rekor/pkg/util"
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 )
 
@@ -97,6 +102,32 @@ func GetRekorEntries(rClient *client.Rekor, env dsselib.Envelope, artifactHash s
 	return resp.GetPayload(), nil
 }
 
+func verifyRootHash(rekorClient *client.Rekor, pub *ecdsa.PublicKey) (*string, error) {
+	infoParams := tlog.GetLogInfoParams{}
+	infoParams.SetTimeout(time.Second * 30)
+	result, err := rekorClient.Tlog.GetLogInfo(&infoParams)
+	if err != nil {
+		return nil, err
+	}
+
+	logInfo := result.GetPayload()
+
+	sth := util.SignedCheckpoint{}
+	if err := sth.UnmarshalText([]byte(*logInfo.SignedTreeHead)); err != nil {
+		return nil, err
+	}
+
+	verifier, err := signature.LoadVerifier(pub, crypto.SHA256)
+	if err != nil {
+		return nil, err
+	}
+
+	if !sth.Verify(verifier) {
+		return nil, errors.New("signature on tree head did not verify")
+	}
+	return logInfo.RootHash, nil
+}
+
 func verifyTlogEntry(ctx context.Context, rekorClient *client.Rekor, uuid string) (*models.LogEntryAnon, error) {
 	params := entries.NewGetLogEntryByUUIDParamsWithContext(ctx)
 	params.EntryUUID = uuid
@@ -120,9 +151,36 @@ func verifyTlogEntry(ctx context.Context, rekorClient *client.Rekor, uuid string
 		hashes = append(hashes, hb)
 	}
 
-	rootHash, _ := hex.DecodeString(*e.Verification.InclusionProof.RootHash)
-	leafHash, _ := hex.DecodeString(params.EntryUUID)
+	rootHash, err := hex.DecodeString(*e.Verification.InclusionProof.RootHash)
+	if err != nil {
+		return nil, errors.New("error decoding hex encoded root hash")
+	}
+	leafHash, err := hex.DecodeString(params.EntryUUID)
+	if err != nil {
+		return nil, errors.New("error decoding hex encoded leaf hash")
+	}
 
+	// Verify the root hash with the Signed Entry Tree Head
+	pub, err := cosign.GetRekorPub(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", err, "unable to fetch Rekor public keys from TUF repository")
+	}
+
+	rekorPubKey, err := cosign.PemToECDSAKey(pub)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", err, "rekor pem to ecdsa")
+	}
+
+	verifiedRootHash, err := verifyRootHash(rekorClient, rekorPubKey)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", err, "error verifying root hash")
+	}
+
+	if !strings.EqualFold(*verifiedRootHash, *e.Verification.InclusionProof.RootHash) {
+		return nil, errors.New("verified root hash does not match inclusion proof root hash")
+	}
+
+	// Verify the entry's inclusion
 	v := logverifier.New(rfc6962.DefaultHasher)
 	if err := v.VerifyInclusionProof(*e.Verification.InclusionProof.LogIndex, *e.Verification.InclusionProof.TreeSize, hashes, rootHash, leafHash); err != nil {
 		return nil, fmt.Errorf("%w: %s", err, "verifying inclusion proof")
@@ -136,14 +194,6 @@ func verifyTlogEntry(ctx context.Context, rekorClient *client.Rekor, uuid string
 		LogID:          *e.LogID,
 	}
 
-	pub, err := cosign.GetRekorPub(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s", err, "unable to fetch Rekor public keys from TUF repository")
-	}
-	rekorPubKey, err := cosign.PemToECDSAKey(pub)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s", err, "rekor pem to ecdsa")
-	}
 	err = cosign.VerifySET(payload, []byte(e.Verification.SignedEntryTimestamp), rekorPubKey)
 	return &e, err
 }
@@ -208,6 +258,7 @@ func FindSigningCertificate(ctx context.Context, uuids []string, dssePayload dss
 	for _, uuid := range uuids {
 		entry, err := verifyTlogEntry(ctx, rClient, uuid)
 		if err != nil {
+			fmt.Printf(err.Error())
 			continue
 		}
 		cert, err := extractCert(entry)
