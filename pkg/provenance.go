@@ -38,8 +38,9 @@ import (
 )
 
 const (
-	defaultRekorAddr = "https://rekor.sigstore.dev"
-	certOidcIssuer   = "https://token.actions.githubusercontent.com"
+	defaultRekorAddr        = "https://rekor.sigstore.dev"
+	certOidcIssuer          = "https://token.actions.githubusercontent.com"
+	trustedReusableWorkflow = "asraa/slsa-on-github/.github/workflows/slsa-builder-go.yml"
 )
 
 var (
@@ -102,29 +103,63 @@ func GetRekorEntries(rClient *client.Rekor, env dsselib.Envelope, artifactHash s
 	return resp.GetPayload(), nil
 }
 
-func verifyRootHash(ctx context.Context, rekorClient *client.Rekor, pub *ecdsa.PublicKey) (*string, error) {
+func verifyRootHash(ctx context.Context, rekorClient *client.Rekor, proof *models.InclusionProof, pub *ecdsa.PublicKey) error {
 	infoParams := tlog.NewGetLogInfoParamsWithContext(ctx)
 	result, err := rekorClient.Tlog.GetLogInfo(infoParams)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	logInfo := result.GetPayload()
 
 	sth := util.SignedCheckpoint{}
 	if err := sth.UnmarshalText([]byte(*logInfo.SignedTreeHead)); err != nil {
-		return nil, err
+		return err
 	}
 
 	verifier, err := signature.LoadVerifier(pub, crypto.SHA256)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if !sth.Verify(verifier) {
-		return nil, errors.New("signature on tree head did not verify")
+		return errors.New("signature on tree head did not verify")
 	}
-	return logInfo.RootHash, nil
+
+	rootHash, err := hex.DecodeString(*proof.RootHash)
+	if err != nil {
+		return errors.New("error decoding root hash in inclusion proof")
+	}
+
+	if *proof.TreeSize == int64(sth.Size) {
+		if !bytes.Equal(rootHash, sth.Hash) {
+			return errors.New("root hash returned from server does not match inclusion proof hash")
+		}
+	} else if *proof.TreeSize < int64(sth.Size) {
+		consistencyParams := tlog.NewGetLogProofParamsWithContext(ctx)
+		consistencyParams.FirstSize = proof.TreeSize // Root hash at the time the proof was returned
+		consistencyParams.LastSize = int64(sth.Size) // Root hash verified with rekor pubkey
+
+		consistencyProof, err := rekorClient.Tlog.GetLogProof(consistencyParams)
+		if err != nil {
+			return err
+		}
+		hashes := [][]byte{}
+		for _, h := range consistencyProof.Payload.Hashes {
+			b, err := hex.DecodeString(h)
+			if err != nil {
+				return errors.New("error decoding consistency proof hashes")
+			}
+			hashes = append(hashes, b)
+		}
+		v := logverifier.New(rfc6962.DefaultHasher)
+		if err := v.VerifyConsistencyProof(*proof.TreeSize, int64(sth.Size), rootHash, sth.Hash, hashes); err != nil {
+			return err
+		}
+	} else if *proof.TreeSize > int64(sth.Size) {
+		return errors.New("inclusion proof returned a tree size larger than the verified tree size")
+	}
+	return nil
 }
 
 func verifyTlogEntry(ctx context.Context, rekorClient *client.Rekor, uuid string) (*models.LogEntryAnon, error) {
@@ -146,7 +181,10 @@ func verifyTlogEntry(ctx context.Context, rekorClient *client.Rekor, uuid string
 
 	hashes := [][]byte{}
 	for _, h := range e.Verification.InclusionProof.Hashes {
-		hb, _ := hex.DecodeString(h)
+		hb, err := hex.DecodeString(h)
+		if err != nil {
+			return nil, errors.New("error decoding inclusion proof hashes")
+		}
 		hashes = append(hashes, hb)
 	}
 
@@ -159,7 +197,7 @@ func verifyTlogEntry(ctx context.Context, rekorClient *client.Rekor, uuid string
 		return nil, errors.New("error decoding hex encoded leaf hash")
 	}
 
-	// Verify the root hash with the Signed Entry Tree Head
+	// Verify the root hash against the current Signed Entry Tree Head
 	pub, err := cosign.GetRekorPub(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", err, "unable to fetch Rekor public keys from TUF repository")
@@ -170,13 +208,9 @@ func verifyTlogEntry(ctx context.Context, rekorClient *client.Rekor, uuid string
 		return nil, fmt.Errorf("%w: %s", err, "rekor pem to ecdsa")
 	}
 
-	verifiedRootHash, err := verifyRootHash(ctx, rekorClient, rekorPubKey)
-	if err != nil {
+	// Verify inclusion against the signed tree head
+	if err := verifyRootHash(ctx, rekorClient, e.Verification.InclusionProof, rekorPubKey); err != nil {
 		return nil, fmt.Errorf("%w: %s", err, "error verifying root hash")
-	}
-
-	if !strings.EqualFold(*verifiedRootHash, *e.Verification.InclusionProof.RootHash) {
-		return nil, fmt.Errorf("verified root hash %s does not match inclusion proof root hash %s", *verifiedRootHash, *e.Verification.InclusionProof.RootHash)
 	}
 
 	// Verify the entry's inclusion
