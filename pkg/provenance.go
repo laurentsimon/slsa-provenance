@@ -38,9 +38,10 @@ import (
 )
 
 const (
-	defaultRekorAddr        = "https://rekor.sigstore.dev"
-	certOidcIssuer          = "https://token.actions.githubusercontent.com"
-	trustedReusableWorkflow = "asraa/slsa-on-github/.github/workflows/slsa-builder-go.yml"
+	defaultRekorAddr = "https://rekor.sigstore.dev"
+	certOidcIssuer   = "https://token.actions.githubusercontent.com"
+	// TODO: Make this into a list.
+	trustedReusableWorkflow = "gossts/slsa-go/.github/workflows/builder.yml"
 )
 
 var (
