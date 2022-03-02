@@ -102,10 +102,9 @@ func GetRekorEntries(rClient *client.Rekor, env dsselib.Envelope, artifactHash s
 	return resp.GetPayload(), nil
 }
 
-func verifyRootHash(rekorClient *client.Rekor, pub *ecdsa.PublicKey) (*string, error) {
-	infoParams := tlog.GetLogInfoParams{}
-	infoParams.SetTimeout(time.Second * 30)
-	result, err := rekorClient.Tlog.GetLogInfo(&infoParams)
+func verifyRootHash(ctx context.Context, rekorClient *client.Rekor, pub *ecdsa.PublicKey) (*string, error) {
+	infoParams := tlog.NewGetLogInfoParamsWithContext(ctx)
+	result, err := rekorClient.Tlog.GetLogInfo(infoParams)
 	if err != nil {
 		return nil, err
 	}
@@ -171,13 +170,13 @@ func verifyTlogEntry(ctx context.Context, rekorClient *client.Rekor, uuid string
 		return nil, fmt.Errorf("%w: %s", err, "rekor pem to ecdsa")
 	}
 
-	verifiedRootHash, err := verifyRootHash(rekorClient, rekorPubKey)
+	verifiedRootHash, err := verifyRootHash(ctx, rekorClient, rekorPubKey)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", err, "error verifying root hash")
 	}
 
 	if !strings.EqualFold(*verifiedRootHash, *e.Verification.InclusionProof.RootHash) {
-		return nil, errors.New("verified root hash does not match inclusion proof root hash")
+		return nil, fmt.Errorf("verified root hash %s does not match inclusion proof root hash %s", *verifiedRootHash, *e.Verification.InclusionProof.RootHash)
 	}
 
 	// Verify the entry's inclusion
