@@ -2,6 +2,7 @@ package pkg
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -33,6 +34,10 @@ func (m *MockIndexClient) SearchIndex(params *index.SearchIndexParams, opts ...i
 }
 
 func (m *MockIndexClient) SetTransport(transport runtime.ClientTransport) {
+}
+
+func errCmp(e1, e2 error) bool {
+	return errors.Is(e1, e2) || errors.Is(e2, e1)
 }
 
 func TestGetRekorEntries(t *testing.T) {
@@ -128,6 +133,99 @@ func TestGetRekorEntries(t *testing.T) {
 			_, err = GetRekorEntries(&mClient, *env, tt.artifactHash)
 			if !errCmp(err, tt.expected) {
 				t.Errorf(cmp.Diff(err, tt.expected))
+			}
+		})
+	}
+}
+
+func TestVerifyWorkflowIdentity(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		workflow *WorkflowIdentity
+		source   string
+		res      bool
+	}{
+		{
+			name: "invalid job workflow ref",
+			workflow: &WorkflowIdentity{
+				CallerRepository:  "asraa/slsa-on-github-test",
+				CallerHash:        "0dfcd24824432c4ce587f79c918eef8fc2c44d7b",
+				JobWobWorkflowRef: "random/workflow/ref",
+				Trigger:           "workflow_dispatch",
+				Issuer:            "https://token.actions.githubusercontent.com",
+			},
+			source: "asraa/slsa-on-github-test",
+			res:    false,
+		},
+		{
+			name: "untrusted job workflow ref",
+			workflow: &WorkflowIdentity{
+				CallerRepository:  "asraa/slsa-on-github-test",
+				CallerHash:        "0dfcd24824432c4ce587f79c918eef8fc2c44d7b",
+				JobWobWorkflowRef: "/malicious/slsa-go/.github/workflows/builder.yml@refs/heads/main",
+				Trigger:           "workflow_dispatch",
+				Issuer:            "https://token.actions.githubusercontent.com",
+			},
+			source: "asraa/slsa-on-github-test",
+			res:    false,
+		},
+		{
+			name: "untrusted job workflow ref",
+			workflow: &WorkflowIdentity{
+				CallerRepository:  "asraa/slsa-on-github-test",
+				CallerHash:        "0dfcd24824432c4ce587f79c918eef8fc2c44d7b",
+				JobWobWorkflowRef: "/gossts/slsa-go/.github/workflows/builder.yml@refs/heads/main",
+				Trigger:           "workflow_dispatch",
+				Issuer:            "https://bad.issuer.com",
+			},
+			source: "asraa/slsa-on-github-test",
+			res:    false,
+		},
+		{
+			name: "unexpected source",
+			workflow: &WorkflowIdentity{
+				CallerRepository:  "malicious/slsa-on-github-test",
+				CallerHash:        "0dfcd24824432c4ce587f79c918eef8fc2c44d7b",
+				JobWobWorkflowRef: "/gossts/slsa-go/.github/workflows/builder.yml@refs/heads/main",
+				Trigger:           "workflow_dispatch",
+				Issuer:            "https://token.actions.githubusercontent.com",
+			},
+			source: "asraa/slsa-on-github-test",
+			res:    false,
+		},
+		{
+			name: "valid workflow identity",
+			workflow: &WorkflowIdentity{
+				CallerRepository:  "asraa/slsa-on-github-test",
+				CallerHash:        "0dfcd24824432c4ce587f79c918eef8fc2c44d7b",
+				JobWobWorkflowRef: "/gossts/slsa-go/.github/workflows/builder.yml@refs/heads/main",
+				Trigger:           "workflow_dispatch",
+				Issuer:            "https://token.actions.githubusercontent.com",
+			},
+			source: "asraa/slsa-on-github-test",
+			res:    true,
+		},
+		{
+			name: "valid workflow identity with fully qualified source",
+			workflow: &WorkflowIdentity{
+				CallerRepository:  "asraa/slsa-on-github-test",
+				CallerHash:        "0dfcd24824432c4ce587f79c918eef8fc2c44d7b",
+				JobWobWorkflowRef: "/gossts/slsa-go/.github/workflows/builder.yml@refs/heads/main",
+				Trigger:           "workflow_dispatch",
+				Issuer:            "https://token.actions.githubusercontent.com",
+			},
+			source: "github.com/asraa/slsa-on-github-test",
+			res:    true,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt // Re-initializing variable so it is not changed while executing the closure below
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := VerifyWorkflowIdentity(tt.workflow, tt.source)
+			if (err == nil) != tt.res {
+				t.Errorf("unexpected result, expected verfication %t", tt.res)
 			}
 		})
 	}
