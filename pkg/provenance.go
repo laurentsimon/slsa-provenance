@@ -361,7 +361,7 @@ func GetWorkflowInfoFromCertificate(cert *x509.Certificate) (*WorkflowIdentity, 
 }
 
 // VerifyWorkflowIdentity verifies the signing certificate information
-func VerifyWorkflowIdentity(id *WorkflowIdentity) error {
+func VerifyWorkflowIdentity(id *WorkflowIdentity, source string) error {
 	// cert URI path is /org/repo/path/to/workflow@ref
 	workflowPath := strings.SplitN(id.JobWobWorkflowRef, "@", 2)
 	if len(workflowPath) < 2 {
@@ -375,5 +375,12 @@ func VerifyWorkflowIdentity(id *WorkflowIdentity) error {
 	if !strings.EqualFold(id.Issuer, certOidcIssuer) {
 		return errors.New("untrusted token issuer")
 	}
+
+	// The caller repository in the x509 extension is not fully qualified. It only contains
+	// {org}/{repository}.
+	if !strings.EqualFold(id.CallerRepository, strings.TrimLeft(source, "github.com/")) {
+		return fmt.Errorf("unexpected caller repository, got %s", id.CallerRepository)
+	}
+
 	return nil
 }
