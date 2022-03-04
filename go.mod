@@ -8,7 +8,6 @@ require (
 	github.com/google/go-cmp v0.5.7
 	github.com/google/trillian v1.4.0
 	github.com/in-toto/in-toto-golang v0.3.4-0.20211211042327-af1f9fb822bf
-	github.com/rhysd/actionlint v1.6.8
 	github.com/secure-systems-lab/go-securesystemslib v0.3.0
 	github.com/sigstore/rekor v0.4.1-0.20220114213500-23f583409af3
 	github.com/sigstore/sigstore v1.1.1-0.20220130134424-bae9b66b8442
@@ -203,9 +202,6 @@ require (
 	github.com/fatih/color v1.13.0 // indirect
 	github.com/mattn/go-colorable v0.1.12 // indirect
 	github.com/mattn/go-isatty v0.0.14 // indirect
-	github.com/mattn/go-runewidth v0.0.13 // indirect
-	github.com/rivo/uniseg v0.2.0 // indirect
-	github.com/robfig/cron v1.2.0 // indirect
 	github.com/sigstore/cosign v1.5.2
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c // indirect
 	golang.org/x/sys v0.0.0-20220114195835-da31bd327af9 // indirect
