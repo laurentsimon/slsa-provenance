@@ -289,6 +289,7 @@ func FindSigningCertificate(ctx context.Context, uuids []string, dssePayload dss
 		if err != nil {
 			continue
 		}
+
 		co := &cosign.CheckOpts{
 			RootCerts:      fulcio.GetRoots(),
 			CertOidcIssuer: certOidcIssuer,
@@ -368,8 +369,8 @@ func VerifyWorkflowIdentity(id *WorkflowIdentity, source string) error {
 
 	// The caller repository in the x509 extension is not fully qualified. It only contains
 	// {org}/{repository}.
-	if !strings.EqualFold(id.CallerRepository, strings.TrimLeft(source, "github.com/")) {
-		return fmt.Errorf("unexpected caller repository, got %s", id.CallerRepository)
+	if !strings.EqualFold(id.CallerRepository, strings.TrimPrefix(source, "github.com/")) {
+		return fmt.Errorf("unexpected caller repository, got '%s'", id.CallerRepository)
 	}
 
 	return nil
