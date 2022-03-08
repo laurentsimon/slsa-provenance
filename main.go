@@ -31,9 +31,7 @@ var (
 	source         string
 )
 
-var (
-	defaultRekorAddr = "https://rekor.sigstore.dev"
-)
+var defaultRekorAddr = "https://rekor.sigstore.dev"
 
 func verify(ctx context.Context, provenancePath, artifactHash, source string) error {
 	provenance, err := os.ReadFile(provenancePath)
@@ -106,8 +104,7 @@ func main() {
 
 	ctx := context.Background()
 	if err := verify(ctx, provenancePath, hex.EncodeToString(h.Sum(nil)), source); err != nil {
-		fmt.Println(err.Error())
-		os.Exit(1)
+		log.Fatal(err)
 	}
 
 	fmt.Println("successfully verified SLSA provenance")
