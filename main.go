@@ -34,23 +34,23 @@ var (
 var defaultRekorAddr = "https://rekor.sigstore.dev"
 
 func verify(ctx context.Context, provenancePath, artifactHash, source string) error {
+	rClient, err := rekor.NewClient(defaultRekorAddr)
+	if err != nil {
+		return err
+	}
+
+	// Get Rekor entries corresponding to the binary artifact in the provenance.
+	uuids, err := pkg.GetRekorEntries(rClient, artifactHash)
+	if err != nil {
+		return err
+	}
+
 	provenance, err := os.ReadFile(provenancePath)
 	if err != nil {
 		return fmt.Errorf("os.ReadFile: %w", err)
 	}
 
 	env, err := pkg.EnvelopeFromBytes(provenance)
-	if err != nil {
-		return err
-	}
-
-	rClient, err := rekor.NewClient(defaultRekorAddr)
-	if err != nil {
-		return err
-	}
-
-	// Get Rekor entries corresponding to the binary artifact (matching Subject digest) in the provenance.
-	uuids, err := pkg.GetRekorEntries(rClient, *env, artifactHash)
 	if err != nil {
 		return err
 	}
@@ -67,6 +67,12 @@ func verify(ctx context.Context, provenancePath, artifactHash, source string) er
 		return err
 	}
 
+	// Unpack and verify info in the provenance, including the Subject Digest.
+	if err := pkg.VerifyProvenance(env, artifactHash); err != nil {
+		return err
+	}
+
+	// Verify the workflow identity
 	if err := pkg.VerifyWorkflowIdentity(workflowInfo, source); err != nil {
 		return err
 	}
