@@ -57,7 +57,7 @@ func EnvelopeFromBytes(payload []byte) (env *dsselib.Envelope, err error) {
 }
 
 // Get SHA256 Subject Digest from the provenance statement.
-func getSha256Digest(env dsselib.Envelope) (string, error) {
+func getSha256Digest(env *dsselib.Envelope) (string, error) {
 	pyld, err := base64.StdEncoding.DecodeString(env.Payload)
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", errorInvalidDssePayload, "decoding payload")
@@ -78,20 +78,10 @@ func getSha256Digest(env dsselib.Envelope) (string, error) {
 }
 
 // GetRekorEntries finds all entry UUIDs by the digest of the artifact binary.
-func GetRekorEntries(rClient *client.Rekor, env dsselib.Envelope, artifactHash string) ([]string, error) {
-	// Get Subject Digest from the provenance statement.
-	hash, err := getSha256Digest(env)
-	if err != nil {
-		return nil, err
-	}
-
-	if !strings.EqualFold(hash, artifactHash) {
-		return nil, errorMismatchHash
-	}
-
+func GetRekorEntries(rClient *client.Rekor, artifactHash string) ([]string, error) {
 	// Use search index to find rekor entry UUIDs that match Subject Digest.
 	params := index.NewSearchIndexParams()
-	params.Query = &models.SearchIndex{Hash: fmt.Sprintf("sha256:%v", hash)}
+	params.Query = &models.SearchIndex{Hash: fmt.Sprintf("sha256:%v", artifactHash)}
 	resp, err := rClient.Index.SearchIndex(params)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", errorRekorSearch, err.Error())
@@ -309,6 +299,7 @@ func FindSigningCertificate(ctx context.Context, uuids []string, dssePayload dss
 		if err != nil {
 			continue
 		}
+
 		co := &cosign.CheckOpts{
 			RootCerts:      fulcio.GetRoots(),
 			CertOidcIssuer: certOidcIssuer,
@@ -388,8 +379,21 @@ func VerifyWorkflowIdentity(id *WorkflowIdentity, source string) error {
 
 	// The caller repository in the x509 extension is not fully qualified. It only contains
 	// {org}/{repository}.
-	if !strings.EqualFold(id.CallerRepository, strings.TrimLeft(source, "github.com/")) {
-		return fmt.Errorf("unexpected caller repository, got %s", id.CallerRepository)
+	if !strings.EqualFold(id.CallerRepository, strings.TrimPrefix(source, "github.com/")) {
+		return fmt.Errorf("unexpected caller repository, got '%s'", id.CallerRepository)
+	}
+
+	return nil
+}
+
+func VerifyProvenance(env *dsselib.Envelope, expectedHash string) error {
+	hash, err := getSha256Digest(env)
+	if err != nil {
+		return err
+	}
+
+	if !strings.EqualFold(hash, expectedHash) {
+		return errorMismatchHash
 	}
 
 	return nil
