@@ -189,18 +189,20 @@ func verifyTlogEntry(ctx context.Context, rekorClient *client.Rekor, uuid string
 	}
 
 	// Verify the root hash against the current Signed Entry Tree Head
-	pub, err := cosign.GetRekorPub(ctx)
+	pubs, err := cosign.GetRekorPubs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", err, "unable to fetch Rekor public keys from TUF repository")
 	}
 
-	rekorPubKey, err := cosign.PemToECDSAKey(pub)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s", err, "rekor pem to ecdsa")
+	var entryVerError error
+	for _, pubKey := range pubs {
+		// Verify inclusion against the signed tree head
+		entryVerError = verifyRootHash(ctx, rekorClient, e.Verification.InclusionProof, pubKey.PubKey)
+		if entryVerError == nil {
+			break
+		}
 	}
-
-	// Verify inclusion against the signed tree head
-	if err := verifyRootHash(ctx, rekorClient, e.Verification.InclusionProof, rekorPubKey); err != nil {
+	if entryVerError != nil {
 		return nil, fmt.Errorf("%w: %s", err, "error verifying root hash")
 	}
 
@@ -218,8 +220,16 @@ func verifyTlogEntry(ctx context.Context, rekorClient *client.Rekor, uuid string
 		LogID:          *e.LogID,
 	}
 
-	err = cosign.VerifySET(payload, []byte(e.Verification.SignedEntryTimestamp), rekorPubKey)
-	return &e, err
+	var setVerError error
+	for _, pubKey := range pubs {
+		setVerError = cosign.VerifySET(payload, []byte(e.Verification.SignedEntryTimestamp), pubKey.PubKey)
+		// Return once the SET is verified successfully.
+		if setVerError == nil {
+			break
+		}
+	}
+
+	return &e, setVerError
 }
 
 func extractCert(e *models.LogEntryAnon) (*x509.Certificate, error) {
